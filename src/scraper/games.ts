@@ -37,13 +37,20 @@ export async function scrapeGames(cities: City[], storage: Storage): Promise<Gam
       logger.info(`Processing page ${page}`);
 
       try {
-        const response = await axios.get(buildGamesApiUrl(), {
-          params: {
-            status: 6,
-            city_id: city._id,
-            page,
-          },
-        });
+        const requestParams = {
+          status: 6,
+          city_id: city._id,
+          page,
+        };
+
+        let response = await axios.get(buildGamesApiUrl(), { params: requestParams });
+
+        if (!response.headers['content-type']?.toString().includes('json')) {
+          logger.warn(`Received non-JSON response for ${city.name}, page ${page}. Waiting before retry...`);
+          logger.debug(response.headers);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          response = await axios.get(buildGamesApiUrl(), { params: requestParams });
+        }
 
         for (const gameData of response.data.data.data) {
           const localDate = parse(gameData.datetime, 'dd.MM.yy HH:mm', new Date());
@@ -116,5 +123,5 @@ export async function scrapeGames(cities: City[], storage: Storage): Promise<Gam
     }
   }
 
-  return games;
+  return [...games.reverse()];
 }

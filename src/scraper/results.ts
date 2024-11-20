@@ -80,13 +80,22 @@ export async function scrapeResults(
   storage: Storage
 ): Promise<GameResult[]> {
   logger.info(`Processing game ${gameId} in ${city.name}`);
+  const gameStartTime = performance.now();
+  let totalTeamLookupTime = 0;
 
   try {
+    const fetchStartTime = performance.now();
     const response = await axios.get(buildGameUrl(city.slug), {
       params: { id: gameId },
     });
+    const fetchTime = performance.now() - fetchStartTime;
+    logger.info(`Game page fetch took ${fetchTime.toFixed(2)}ms`);
 
+    const parseStartTime = performance.now();
     const $ = load(response.data);
+    const parseTime = performance.now() - parseStartTime;
+    logger.debug(`HTML parse took ${parseTime.toFixed(2)}ms`);
+
     const results: GameResult[] = [];
 
     const table = $('table')
@@ -103,8 +112,10 @@ export async function scrapeResults(
 
     const headerRow = table.find('thead tr');
     const columns = findColumnIndexes($, headerRow);
-
+    const teamStartTime = performance.now();
+    
     for (const row of table.find('tbody tr').toArray()) {
+      const teamLookupStart = performance.now();
       const $row = $(row);
       const teamName = $row.find(`td:eq(${columns.team})`).text().trim();
       const teamCity = $row.find(`td:eq(${columns.team_city})`).text().trim();
@@ -112,6 +123,8 @@ export async function scrapeResults(
       // Find or create team
       const team_city = (await storage.findCityByName(teamCity)) ?? city;
       let team = await storage.findTeamByNameAndCity(teamName, team_city._id);
+      const teamLookupTime = performance.now() - teamLookupStart;
+      totalTeamLookupTime += teamLookupTime;
 
       if (!team) {
         let rank_id: string | undefined;
@@ -166,13 +179,23 @@ export async function scrapeResults(
       results.push(result);
     }
 
+    const totalTime = performance.now() - gameStartTime;
+    const teamsProcessed = results.length;
+    logger.info(`Game ${gameId} processing completed:
+      - Total time: ${totalTime.toFixed(2)}ms
+      - Teams processed: ${teamsProcessed}
+      - Average time per team: ${(totalTime / teamsProcessed).toFixed(2)}ms
+      - Total team lookup time: ${totalTeamLookupTime.toFixed(2)}ms
+      - Average team lookup time: ${(totalTeamLookupTime / teamsProcessed).toFixed(2)}ms`);
+
     if (results.some(r => r.has_errors)) {
       logger.warn(`Found results with calculation errors in game ${gameId}`);
     }
 
     return results;
   } catch (error) {
-    logger.error(`Failed to scrape results for game ${gameId}:`, error);
+    const totalTime = performance.now() - gameStartTime;
+    logger.error(`Failed to scrape results for game ${gameId} after ${totalTime.toFixed(2)}ms:`, error);
     return [];
   }
 }

@@ -9,13 +9,18 @@ import { normalizeText } from '../utils/normalize';
 import type { Storage } from './interface';
 import { StorageError } from './interface';
 
+type TeamCacheKey = string;
+type TeamCache = Map<TeamCacheKey, Team>;
+
 export class CsvStorage implements Storage {
-  private readonly gamesFile: string;
-  private readonly resultsFile: string;
-  private readonly citiesFile: string;
-  private readonly ranksFile: string;
-  private readonly teamsFile: string;
-  private readonly seriesFile: string;
+  protected readonly gamesFile: string;
+  protected readonly resultsFile: string;
+  protected readonly citiesFile: string;
+  protected readonly ranksFile: string;
+  protected readonly teamsFile: string;
+  protected readonly seriesFile: string;
+
+  private teamCache: TeamCache | null = null;
 
   constructor(
     gamesFile = path.join(config.storage.path, 'games.csv'),
@@ -32,6 +37,54 @@ export class CsvStorage implements Storage {
     this.teamsFile = teamsFile;
     this.seriesFile = seriesFile;
   }
+
+  private getCacheKey(name: string, cityId: number): TeamCacheKey {
+    return `${normalizeText(name).toLowerCase()}_${cityId}`;
+  }
+
+  private async loadTeamCache(): Promise<TeamCache> {
+    if (this.teamCache) {
+      return this.teamCache;
+    }
+
+    logger.info('Loading teams into memory cache...');
+    const startTime = performance.now();
+
+    try {
+      const content = await fs.readFile(this.teamsFile, 'utf-8');
+      const records = parse(content, {
+        columns: true,
+        skip_empty_lines: true,
+      });
+
+      this.teamCache = new Map();
+
+      for (const record of records) {
+        const team: Team = {
+          _id: record._id,
+          city_id: parseInt(record.city_id),
+          name: record.name,
+          slug: record.slug,
+          previous_team_id: record.previous_team_id || undefined,
+          inconsistent_rank: record.inconsistent_rank === 'true',
+        };
+        const key = this.getCacheKey(team.name, team.city_id);
+        this.teamCache.set(key, team);
+      }
+
+      const loadTime = performance.now() - startTime;
+      logger.info(`Teams cache loaded in ${loadTime.toFixed(2)}ms`);
+
+      return this.teamCache;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.teamCache = new Map();
+        return this.teamCache;
+      }
+      throw new StorageError('Failed to load team cache', error);
+    }
+  }
+
   async findCityByName(name: string): Promise<City | null> {
     try {
       const content = await fs.readFile(this.citiesFile, 'utf-8');
@@ -245,6 +298,7 @@ export class CsvStorage implements Storage {
       });
 
       return records
+        .slice(11875)
         .filter((record: any) => record.processed !== 'true')
         .map((record: any) => ({
           ...record,
@@ -334,60 +388,78 @@ export class CsvStorage implements Storage {
   }
 
   async findTeamByNameAndCity(name: string, cityId: number): Promise<Team | null> {
+    const startTime = performance.now();
     try {
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const records = parse(content, {
-        columns: true,
-        skip_empty_lines: true,
-      });
+      const cache = await this.loadTeamCache();
+      const key = this.getCacheKey(name, cityId);
+      const team = cache.get(key) || null;
 
-      const normalizedName = normalizeText(name).toLowerCase();
-      const team = records.find(
-        (record: any) =>
-          normalizeText(record.name).toLowerCase() === normalizedName && parseInt(record.city_id) === cityId
-      );
+      const lookupTime = performance.now() - startTime;
+      logger.debug(`Team lookup took ${lookupTime.toFixed(2)}ms`);
 
-      if (!team) return null;
-
-      return {
-        _id: team._id,
-        city_id: parseInt(team.city_id),
-        name: team.name,
-        slug: team.slug,
-        previous_team_id: team.previous_team_id || undefined,
-        inconsistent_rank: team.inconsistent_rank === 'true',
-      };
+      return team;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
       throw new StorageError('Failed to find team', error);
     }
   }
 
   async saveTeam(team: Team): Promise<void> {
     try {
-      let fileExists = false;
-      try {
-        await fs.access(this.teamsFile);
-        fileExists = true;
-      } catch {
-        // File doesn't exist
+      // Update cache first
+      if (this.teamCache) {
+        const key = this.getCacheKey(team.name, team.city_id);
+        this.teamCache.set(key, team);
       }
+
+      // Then update file
+      const content = await fs.readFile(this.teamsFile, 'utf-8');
+      const records = parse(content, {
+        columns: true,
+        skip_empty_lines: true,
+      });
+
+      records.push({
+        _id: team._id,
+        city_id: team.city_id,
+        name: team.name,
+        slug: team.slug,
+        previous_team_id: team.previous_team_id || '',
+        inconsistent_rank: team.inconsistent_rank,
+      });
 
       const csvWriter = createObjectCsvWriter({
         path: this.teamsFile,
-        append: fileExists,
         header: ['_id', 'city_id', 'name', 'slug', 'previous_team_id', 'inconsistent_rank'].map(key => ({
           id: key,
           title: key,
         })),
       });
 
-      await csvWriter.writeRecords([team]);
-      logger.debug(`Saved team ${team.name} to ${this.teamsFile}`);
+      await csvWriter.writeRecords(records);
     } catch (error) {
-      throw new StorageError(`Failed to save team ${team.name}`, error);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new StorageError('Failed to save team', error);
+      }
+
+      // File doesn't exist, create it
+      const csvWriter = createObjectCsvWriter({
+        path: this.teamsFile,
+        header: ['_id', 'city_id', 'name', 'slug', 'previous_team_id', 'inconsistent_rank'].map(key => ({
+          id: key,
+          title: key,
+        })),
+      });
+
+      await csvWriter.writeRecords([
+        {
+          _id: team._id,
+          city_id: team.city_id,
+          name: team.name,
+          slug: team.slug,
+          previous_team_id: team.previous_team_id || '',
+          inconsistent_rank: team.inconsistent_rank,
+        },
+      ]);
     }
   }
 
@@ -417,5 +489,16 @@ export class CsvStorage implements Storage {
       }
       throw new StorageError('Failed to find team by slug', error);
     }
+  }
+
+  async initialize(): Promise<void> {
+    // Create storage directory if it doesn't exist
+    await fs.mkdir(config.storage.path, { recursive: true });
+    logger.info(`Initialized CSV storage in ${config.storage.path}`);
+  }
+
+  async syncChanges(_message?: string): Promise<void> {
+    // CSV storage is synchronous, no need to sync changes
+    return;
   }
 }

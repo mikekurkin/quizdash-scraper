@@ -1,6 +1,9 @@
 import type { City, Game, GameResult, RankMapping, Series, Team } from '../types';
 
 export interface Storage {
+  // Initialization
+  initialize(): Promise<void>;
+
   // City operations
   findCityByName(name: string): Promise<City | null>;
   getCities(): Promise<City[]>;
@@ -28,6 +31,9 @@ export interface Storage {
   findTeamByNameAndCity(name: string, cityId: number): Promise<Team | null>;
   saveTeam(team: Team): Promise<void>;
   findTeamBySlugAndCity(slug: string, cityId: number): Promise<Team | null>;
+
+  // Sync changes
+  syncChanges(message?: string): Promise<void>;
 }
 
 export class StorageError extends Error {
