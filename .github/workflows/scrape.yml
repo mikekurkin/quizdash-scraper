@@ -1,0 +1,45 @@
+name: scrape
+
+on:
+  schedule:
+    - cron: '2 3 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+
+permissions:
+  contents: read
+
+jobs:
+  scrape:
+    environment: scrape-runner
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout scraper repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run scraper and post results to storage repo
+        env:
+          CITY_IDS: ${{ vars.CITY_IDS }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          STORAGE_TYPE: ${{ vars.STORAGE_TYPE }}
+          STORAGE_PATH: ${{ vars.STORAGE_PATH }}
+          GITHUB_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+          GITHUB_OWNER: ${{ vars.DATA_REPO_OWNER }}
+          GITHUB_REPO: ${{ vars.DATA_REPO_NAME }}
+          GITHUB_BRANCH: ${{ vars.DATA_REPO_BRANCH }}
+        run: npm run start
