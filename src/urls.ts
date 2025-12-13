@@ -1,25 +1,26 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 const UrlConfigSchema = z.object({
   baseUrl: z.string().url(),
   paths: z.object({
-    gameResultsPage: z.string(),
-    gamesApi: z.string(),
+    gameResultsApi: z.function(z.tuple([z.string()]), z.string()),
+    gamesApi: z.function(z.tuple([z.number()]), z.string()),
   }),
 });
 
 const urlConfig = UrlConfigSchema.parse({
-  baseUrl: process.env.API_BASE_URL || 'https://quizplease.ru',
+  baseUrl: process.env.API_BASE_URL || "https://api.quizplease.ru/api",
   paths: {
-    gameResultsPage: '/game-page',
-    gamesApi: '/api/game',
+    gameResultsApi: (gameId: string) => `/games/${gameId}/results`,
+    gamesApi: (cityId: number) => `/games/finished/${cityId}`,
   },
 });
 
-export function buildGamesApiUrl(): string {
-  return `${urlConfig.baseUrl}${urlConfig.paths.gamesApi}`;
+export function buildGamesApiUrl(cityId: number): string {
+  return `${urlConfig.baseUrl}${urlConfig.paths.gamesApi(cityId)}`;
 }
 
-export function buildGameUrl(citySlug: string): string {
-  return `https://${citySlug}.quizplease.ru${urlConfig.paths.gameResultsPage}`;
+export function buildGameResultsApiUrl(gameId: string): string {
+  return `${urlConfig.baseUrl}${urlConfig.paths.gameResultsApi(gameId)}`;
+  // return `https://${citySlug}.quizplease.ru${urlConfig.paths.gameResultsPage}`;
 }

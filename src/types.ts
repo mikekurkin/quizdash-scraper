@@ -3,6 +3,8 @@ export interface City {
   name: string;
   slug: string;
   timezone: string;
+  latitude?: string;
+  longitude?: string;
   last_game_id?: number;
 }
 
@@ -10,13 +12,16 @@ export interface Series {
   _id: string;
   name: string;
   slug: string;
+  template_name?: string;
+  template_type?: string;
 }
 
 export interface Game {
-  _id: number;
+  _id: string;
   city_id: number;
   series_id: string;
   number: string;
+  package_number?: string;
   date: Date;
   price: number;
   location: string;
@@ -27,7 +32,7 @@ export interface Game {
 
 export interface GameResult {
   _id: string;
-  game_id: number;
+  game_id: string;
   team_id: string;
   rounds: number[];
   sum: number;
@@ -38,6 +43,7 @@ export interface GameResult {
 
 export interface Team {
   _id: string;
+  qp_id?: string;
   city_id: number;
   name: string;
   slug: string;

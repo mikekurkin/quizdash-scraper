@@ -1,4 +1,11 @@
-import type { City, Game, GameResult, RankMapping, Series, Team } from '../types';
+import type {
+  City,
+  Game,
+  GameResult,
+  RankMapping,
+  Series,
+  Team,
+} from "../types";
 
 export interface Storage {
   // Initialization
@@ -8,7 +15,7 @@ export interface Storage {
   findCityByName(name: string): Promise<City | null>;
   getCities(): Promise<City[]>;
   getCitiesByIds(ids: number[]): Promise<City[]>;
-  updateCityLastGameId(cityId: number, lastGameId: number): Promise<void>;
+  updateCityLastGameId(cityId: number, lastGameId: string): Promise<void>;
 
   // Series operations
   findSeriesByName(name: string): Promise<Series | null>;
@@ -21,7 +28,7 @@ export interface Storage {
   saveGames(games: Game[]): Promise<void>;
   getLastGameId(): Promise<number | null>;
   getGamesWithoutResults(): Promise<Game[]>;
-  markGameAsProcessed(gameId: number): Promise<void>;
+  markGameAsProcessed(gameId: string): Promise<void>;
 
   // Result operations
   saveResults(results: GameResult[]): Promise<void>;
@@ -29,8 +36,10 @@ export interface Storage {
 
   // Team operations
   findTeamByNameAndCity(name: string, cityId: number): Promise<Team | null>;
+  findTeamByQpId(qp_id: string): Promise<Team | null>;
   saveTeam(team: Team): Promise<void>;
   findTeamBySlugAndCity(slug: string, cityId: number): Promise<Team | null>;
+  updateTeams(teams: Team[]): Promise<void>;
 
   // Sync changes
   syncChanges(message?: string): Promise<void>;
@@ -39,6 +48,6 @@ export interface Storage {
 export class StorageError extends Error {
   constructor(message: string, public cause?: unknown) {
     super(message);
-    this.name = 'StorageError';
+    this.name = "StorageError";
   }
 }

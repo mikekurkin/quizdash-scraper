@@ -1,11 +1,11 @@
-import { CronExpressionParser } from 'cron-parser';
-import cron from 'node-cron';
-import { config, createStorage } from './config';
-import { scrapeGames } from './scraper/games';
-import { scrapeResults } from './scraper/results';
-import { Storage } from './storage/interface';
-import { logger } from './utils/logger';
-import { createProgressBar } from './utils/progress';
+import { CronExpressionParser } from "cron-parser";
+import cron from "node-cron";
+import { config, createStorage } from "./config";
+import { scrapeGames } from "./scraper/games";
+import { scrapeResults } from "./scraper/results";
+import { Storage } from "./storage/interface";
+import { logger } from "./utils/logger";
+import { createProgressBar } from "./utils/progress";
 
 let storage: Storage;
 let isShuttingDown = false;
@@ -14,17 +14,19 @@ async function cleanup() {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  logger.info('Shutting down gracefully...');
+  logger.info("Shutting down gracefully...");
 
-  if (config.storage.type === 'github') {
+  if (config.storage.type === "github") {
     try {
-      const date = new Date().toISOString().split('T')[0];
-      const message = `feat: Update quiz results [${date}]\n\n` + `- Ensure all changes are synchronized`;
+      const date = new Date().toISOString().split("T")[0];
+      const message =
+        `feat: Update quiz results [${date}]\n\n` +
+        `- Ensure all changes are synchronized`;
 
       await storage.syncChanges(message);
-      logger.info('Successfully synced changes');
+      logger.info("Successfully synced changes");
     } catch (error) {
-      logger.error('Failed to sync changes during shutdown:', error);
+      logger.error("Failed to sync changes during shutdown:", error);
     }
   }
 
@@ -35,7 +37,7 @@ async function main() {
   try {
     // Initialize storage if not already initialized
     if (!storage) {
-      logger.info('Initializing storage...');
+      logger.info("Initializing storage...");
       storage = await createStorage();
     }
 
@@ -45,24 +47,29 @@ async function main() {
     // Process results
     const processedGames = await processPendingResults();
 
-    if (config.storage.type === 'github' && (newGames.length || processedGames?.length)) {
+    if (
+      config.storage.type === "github" &&
+      (newGames.length || processedGames?.length)
+    ) {
       try {
-        const date = new Date().toISOString().split('T')[0];
+        const date = new Date().toISOString().split("T")[0];
         const message =
           `feat: Update quiz results [${date}]\n\n` +
           `- Add ${newGames.length} newly scraped games\n` +
-          `- Process results for ${processedGames?.length || 0} pending games\n`;
+          `- Process results for ${
+            processedGames?.length || 0
+          } pending games\n`;
 
         await storage.syncChanges(message);
-        logger.info('Successfully synced all changes');
+        logger.info("Successfully synced all changes");
       } catch (error) {
-        logger.error('Failed to sync changes:', error);
+        logger.error("Failed to sync changes:", error);
       }
     }
 
     return true; // Indicate successful run
   } catch (error) {
-    logger.error('Failed to run main process:', error);
+    logger.error("Failed to run main process:", error);
     return false; // Indicate failed run
   }
 }
@@ -73,30 +80,34 @@ async function processNewGames() {
     logger.info(`Processing ${cities.length} cities`);
 
     const games = await scrapeGames(cities, storage);
+
     if (games.length) {
       await storage.saveGames(games);
       logger.info(`Found ${games.length} new games`);
 
-      const progress = createProgressBar(games.length, 'Processing new games');
+      // Update last game ID for each city
+      for (let city of cities) {
+        const cityGames = games.filter((game) => game.city_id === city._id);
+        if (cityGames.length) {
+          const lastGameId = cityGames.at(-1)?._id;
+          if (lastGameId)
+            await storage.updateCityLastGameId(city._id, lastGameId);
+        }
+      }
+
+      const progress = createProgressBar(games.length, "Processing new games");
 
       for (const game of games) {
         if (isShuttingDown) {
-          logger.info('Shutdown signal received, stopping game processing');
+          logger.info("Shutdown signal received, stopping game processing");
           break;
         }
 
         try {
-          const city = cities.find(c => c._id === game.city_id);
+          const city = cities.find((c) => c._id === game.city_id);
           if (!city) {
             progress.increment(`Skipped game ${game._id} (city not found)`);
             continue;
-          }
-
-          // Update last game ID for each city
-          const cityGames = games.filter(game => game.city_id === city._id);
-          if (cityGames.length) {
-            const lastGameId = cityGames.at(-1)?._id;
-            if (lastGameId) await storage.updateCityLastGameId(city._id, lastGameId);
           }
         } catch (error) {
           logger.error(`Failed to process game ${game._id}:`, error);
@@ -109,40 +120,65 @@ async function processNewGames() {
 
     return games;
   } catch (error) {
-    logger.error('Failed to process new games:', error);
+    logger.error("Failed to process new games:", error);
     return [];
   }
 }
 
 async function processPendingResults() {
   try {
-    const [pendingGames, cities, rankMappings] = await Promise.all([
+    const [allPendingGames, cities, rankMappings] = await Promise.all([
       storage.getGamesWithoutResults(),
       storage.getCities(),
       storage.getRankMappings(),
     ]);
 
+    const pendingGames = allPendingGames; //.slice(-100, -1);
+
     if (!pendingGames.length) {
-      logger.info('No pending games to process');
+      logger.info("No pending games to process");
       return;
     }
 
-    const progress = createProgressBar(pendingGames.length, 'Processing pending results');
+    const progress = createProgressBar(
+      pendingGames.length,
+      "Processing pending results"
+    );
 
     for (const game of pendingGames) {
       if (isShuttingDown) {
-        logger.info('Shutdown signal received, stopping result processing');
+        logger.info("Shutdown signal received, stopping result processing");
         break;
       }
 
+      // To mark old games for which results are not in new api as processed
+      if (game.date < new Date(2025, 11, 1)) {
+        logger.info(`Game ${game._id} is old, skipping`);
+        progress.increment(`Skipped game ${game._id} (old)`);
+        await storage.markGameAsProcessed(game._id);
+        continue;
+      }
+
+      if (game.is_stream) {
+        logger.info(`Game ${game._id} is stream, skipping`);
+        progress.increment(`Skipped game ${game._id} (stream)`);
+        await storage.markGameAsProcessed(game._id);
+        continue;
+      }
+
       try {
-        const city = cities.find(c => c._id === game.city_id);
+        const city = cities.find((c) => c._id === game.city_id);
         if (!city) {
           progress.increment(`Skipped game ${game._id} (city not found)`);
           continue;
         }
 
-        const results = await scrapeResults(game._id, city, rankMappings, storage);
+        const results = await scrapeResults(
+          game._id,
+          city,
+          rankMappings,
+          storage
+        );
         if (results.length) {
           await storage.saveResults(results);
           await storage.markGameAsProcessed(game._id);
@@ -159,7 +195,7 @@ async function processPendingResults() {
     progress.finish();
     return pendingGames;
   } catch (error) {
-    logger.error('Failed to process pending results:', error);
+    logger.error("Failed to process pending results:", error);
   }
 }
 
@@ -167,7 +203,7 @@ const runMain = async () => {
   try {
     const success = await main();
     if (success) {
-      logger.info('Completed successfully');
+      logger.info("Completed successfully");
       if (config.cronSchedule) {
         if (cron.getTasks().size == 0) {
           logger.info(`Scheduling regular runs: ${config.cronSchedule}`);
@@ -175,27 +211,27 @@ const runMain = async () => {
             try {
               await runMain();
             } catch (error) {
-              logger.error('Failed to run scheduled task:', error);
+              logger.error("Failed to run scheduled task:", error);
             }
           });
         }
         try {
           const expr = CronExpressionParser.parse(config.cronSchedule);
           const nextRun = expr.next().toDate();
-          logger.info(`Next scheduled run: ${nextRun.toLocaleString('en-GB')}`);
+          logger.info(`Next scheduled run: ${nextRun.toLocaleString("en-GB")}`);
         } catch (err) {
-          logger.error('Failed to calculate next scheduled run time:', err);
+          logger.error("Failed to calculate next scheduled run time:", err);
         }
       } else {
-        logger.info('No schedule is set, shutting down');
+        logger.info("No schedule is set, shutting down");
         process.exit(0);
       }
     } else {
-      logger.error('Main process failed');
+      logger.error("Main process failed");
       process.exit(1);
     }
   } catch (error) {
-    logger.error('Failed to run main process:', error);
+    logger.error("Failed to run main process:", error);
     process.exit(1);
   }
 };
@@ -204,22 +240,22 @@ const runMain = async () => {
 runMain();
 
 // Handle graceful shutdown
-process.on('SIGINT', async () => {
+process.on("SIGINT", async () => {
   try {
     await cleanup();
     process.exit(0);
   } catch (error) {
-    logger.error('Error during cleanup:', error);
+    logger.error("Error during cleanup:", error);
     process.exit(1);
   }
 });
 
-process.on('SIGTERM', async () => {
+process.on("SIGTERM", async () => {
   try {
     await cleanup();
     process.exit(0);
   } catch (error) {
-    logger.error('Error during cleanup:', error);
+    logger.error("Error during cleanup:", error);
     process.exit(1);
   }
 });
