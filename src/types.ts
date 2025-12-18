@@ -5,7 +5,8 @@ export interface City {
   timezone: string;
   latitude?: string;
   longitude?: string;
-  last_game_id?: number;
+  params?: {scrape?: {strategy: string, _id?: number, since?: Date}};
+  last_game_id?: string;
 }
 
 export interface Series {

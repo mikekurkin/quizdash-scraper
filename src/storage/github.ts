@@ -64,6 +64,8 @@ export class GitHubStorage extends CsvStorage {
       try {
         await this.runGitCommand(
           "clone",
+          "-b",
+          this.branch,
           `https://${process.env.GITHUB_TOKEN}@github.com/${this.owner}/${this.repo}.git`,
           "."
         );
@@ -108,23 +110,17 @@ export class GitHubStorage extends CsvStorage {
         "scraper@quizdash.ru"
       );
 
-      // Create .gitattributes first
+      // Check for .gitattributes to decide if we should use LFS
       const gitattributesPath = path.join(this.dataRepoPath, ".gitattributes");
       try {
-        await fs.access(gitattributesPath);
-      } catch {
-        const gitattributesContent =
-          "*.csv filter=lfs diff=lfs merge=lfs -text";
-        await fs.writeFile(gitattributesPath, gitattributesContent);
+        const content = await fs.readFile(gitattributesPath, "utf-8");
+        if (content.includes("filter=lfs")) {
+          logger.info("Configuring Git LFS...");
+          await this.runGitCommand("lfs", "install");
+        }
+      } catch (e) {
+        // ignore, .gitattributes does not exist
       }
-
-      // Add and commit .gitattributes first
-      await this.runGitCommand("add", ".gitattributes");
-      await this.runGitCommand("commit", "-m", '"Configure Git LFS"');
-
-      // Now configure Git LFS
-      logger.info("Configuring Git LFS...");
-      await this.runGitCommand("lfs", "install");
 
       // Add all existing files
       await this.runGitCommand("add", ".");
@@ -171,7 +167,7 @@ export class GitHubStorage extends CsvStorage {
 
       // Try to merge remote changes
       try {
-        await this.runGitCommand("merge", "origin/main");
+        await this.runGitCommand("merge", `origin/${this.branch}`);
         // Handle any merge conflicts
         await this.handleMergeConflicts();
       } catch (error) {
@@ -196,9 +192,17 @@ export class GitHubStorage extends CsvStorage {
         "bot@quizdash.local"
       );
 
-      // Configure Git LFS
-      await this.runGitCommand("lfs", "install");
-      await this.runGitCommand("lfs", "pull");
+      // Configure Git LFS if .gitattributes is present
+      const gitattributesPath = path.join(this.dataRepoPath, ".gitattributes");
+      try {
+        const content = await fs.readFile(gitattributesPath, "utf-8");
+        if (content.includes("filter=lfs")) {
+          await this.runGitCommand("lfs", "install");
+          await this.runGitCommand("lfs", "pull");
+        }
+      } catch (e) {
+        // ignore, .gitattributes does not exist
+      }
     }
 
     // Ensure our files exist but NEVER overwrite them
@@ -606,7 +610,7 @@ export class GitHubStorage extends CsvStorage {
 
       // Push changes
       await this.runGitCommand("push", "origin", this.branch);
-      logger.info("Successfully synced all changes");
+      logger.info(`Pushed changes to ${this.owner}/${this.repo}:${this.branch}`);
       this.modifiedFiles.clear();
     } catch (error) {
       // On error, try to clean up

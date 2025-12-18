@@ -1,11 +1,11 @@
 import { CronExpressionParser } from "cron-parser";
 import cron from "node-cron";
 import { config, createStorage } from "./config";
-import { scrapeGames } from "./scraper/games";
-import { scrapeResults } from "./scraper/results";
 import { Storage } from "./storage/interface";
 import { logger } from "./utils/logger";
 import { createProgressBar } from "./utils/progress";
+import { availableStrategies, createScraper } from "./scraper/scraper";
+import { Game, GameResult } from "./types";
 
 let storage: Storage;
 let isShuttingDown = false;
@@ -41,24 +41,36 @@ async function main() {
       storage = await createStorage();
     }
 
+    const cities = await storage.getCities()
+    cities.forEach((city) => {
+      const strategy = city.params?.scrape?.strategy
+      if ( strategy && !availableStrategies.includes(strategy) ) {
+        if (config.cityIds.includes(city._id)) {
+          config.cityIds = config.cityIds.filter(id => id !== city._id)
+          logger.error(`Strategy ${strategy} for city ${city.name} is not implemented, it will be skipped.`)
+        } else {
+          logger.warn(`Strategy ${strategy} for city ${city.name} is not implemented.`)
+        }
+      }
+    })
+
     // Process new games
     const newGames = await processNewGames();
+    // return
 
     // Process results
-    const processedGames = await processPendingResults();
+    const processedResults = await processPendingResults();
 
     if (
       config.storage.type === "github" &&
-      (newGames.length || processedGames?.length)
+      (newGames.length || processedResults.length)
     ) {
       try {
         const date = new Date().toISOString().split("T")[0];
         const message =
           `feat: Update quiz results [${date}]\n\n` +
           `- Add ${newGames.length} newly scraped games\n` +
-          `- Process results for ${
-            processedGames?.length || 0
-          } pending games\n`;
+          `- Process ${processedResults?.length || 0} new results\n`;
 
         await storage.syncChanges(message);
         logger.info("Successfully synced all changes");
@@ -77,48 +89,35 @@ async function main() {
 async function processNewGames() {
   try {
     const cities = await storage.getCitiesByIds(config.cityIds);
+    const rankMappings = await storage.getRankMappings();
     logger.info(`Processing ${cities.length} cities`);
 
-    const games = await scrapeGames(cities, storage);
+    const games: Game[] = []
 
-    if (games.length) {
-      await storage.saveGames(games);
-      logger.info(`Found ${games.length} new games`);
+    for (let city of cities) {
+      try {
+        const scraper = createScraper(city, storage, rankMappings)
+        logger.info(`Scraping new games in ${city.name} using ${scraper.strategy} strategy`);
 
-      // Update last game ID for each city
-      for (let city of cities) {
-        const cityGames = games.filter((game) => game.city_id === city._id);
+        const cityGames = await scraper.scrapeGames();
+
         if (cityGames.length) {
+          games.push(...cityGames)
+
+          await storage.saveGames(cityGames);
+          logger.info(`Found ${cityGames.length} new games`);
+
+          // Update last game ID
           const lastGameId = cityGames.at(-1)?._id;
           if (lastGameId)
             await storage.updateCityLastGameId(city._id, lastGameId);
         }
+      } catch (e) {
+        logger.error(`Failed to process games for city ${city.name}`, e);
+        continue
       }
-
-      const progress = createProgressBar(games.length, "Processing new games");
-
-      for (const game of games) {
-        if (isShuttingDown) {
-          logger.info("Shutdown signal received, stopping game processing");
-          break;
-        }
-
-        try {
-          const city = cities.find((c) => c._id === game.city_id);
-          if (!city) {
-            progress.increment(`Skipped game ${game._id} (city not found)`);
-            continue;
-          }
-        } catch (error) {
-          logger.error(`Failed to process game ${game._id}:`, error);
-          progress.increment(`Failed game ${game._id}`);
-        }
-      }
-
-      progress.finish();
     }
-
-    return games;
+    return games
   } catch (error) {
     logger.error("Failed to process new games:", error);
     return [];
@@ -129,73 +128,68 @@ async function processPendingResults() {
   try {
     const [allPendingGames, cities, rankMappings] = await Promise.all([
       storage.getGamesWithoutResults(),
-      storage.getCities(),
+      storage.getCitiesByIds(config.cityIds),
       storage.getRankMappings(),
     ]);
 
-    const pendingGames = allPendingGames; //.slice(-100, -1);
 
-    if (!pendingGames.length) {
+    if (!allPendingGames.length) {
       logger.info("No pending games to process");
-      return;
+      return [];
     }
 
     const progress = createProgressBar(
-      pendingGames.length,
+      allPendingGames.length,
       "Processing pending results"
     );
 
-    for (const game of pendingGames) {
-      if (isShuttingDown) {
-        logger.info("Shutdown signal received, stopping result processing");
-        break;
-      }
+    const results: GameResult[] = []
 
-      // To mark old games for which results are not in new api as processed
-      if (game.date < new Date(2025, 11, 1)) {
-        logger.info(`Game ${game._id} is old, skipping`);
-        progress.increment(`Skipped game ${game._id} (old)`);
-        await storage.markGameAsProcessed(game._id);
-        continue;
-      }
+    for (let city of cities) {
+      const cityGames = allPendingGames.filter(game => game.city_id == city._id);
+      const scraper = createScraper(city, storage, rankMappings)
 
-      if (game.is_stream) {
-        logger.info(`Game ${game._id} is stream, skipping`);
-        progress.increment(`Skipped game ${game._id} (stream)`);
-        await storage.markGameAsProcessed(game._id);
-        continue;
-      }
+      logger.info(`Scraping game results for city ${city.name} using ${scraper.strategy} strategy`)
 
-      try {
-        const city = cities.find((c) => c._id === game.city_id);
-        if (!city) {
-          progress.increment(`Skipped game ${game._id} (city not found)`);
+      for (let game of cityGames) {
+        // Ignore old games
+        if (city.params?.scrape?.since && game.date < city.params?.scrape?.since) {
+          // logger.info(`Game ${game._id} is old, skipping`);
+          progress.increment(`Skipped game ${game._id} (old)`);
+          // await storage.markGameAsProcessed(game._id);
           continue;
         }
 
-        const results = await scrapeResults(
-          game._id,
-          city,
-          rankMappings,
-          storage
-        );
-        if (results.length) {
-          await storage.saveResults(results);
+        // Ignore streams for now
+        if (game.is_stream) {
+          logger.info(`Game ${game._id} is stream, skipping`);
+          progress.increment(`Skipped game ${game._id} (stream)`);
           await storage.markGameAsProcessed(game._id);
-          progress.increment(`Processed game ${game._id}`);
-        } else {
-          progress.increment(`No results for game ${game._id}`);
+          continue;
         }
-      } catch (error) {
-        logger.error(`Failed to process game ${game._id}:`, error);
-        progress.increment(`Failed game ${game._id}`);
+
+        try {
+          const gameResults = await scraper.scrapeResults(game);
+          if (gameResults.length) {
+            await storage.saveResults(gameResults);
+            await storage.markGameAsProcessed(game._id);
+            progress.increment(`Processed game ${game._id}`);
+            results.push(...gameResults);
+          } else {
+            progress.increment(`No results for game ${game._id}`);
+          }
+        } catch (e) {
+          logger.error(`Error scraping results for ${game._id} using ${scraper.strategy} strategy`, e)
+          progress.increment(`Scraping error ${game._id}`);
+          continue;
+        }
       }
     }
-
     progress.finish();
-    return pendingGames;
+    return results;
   } catch (error) {
     logger.error("Failed to process pending results:", error);
+    return []
   }
 }
 

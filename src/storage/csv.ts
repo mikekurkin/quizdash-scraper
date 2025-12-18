@@ -119,9 +119,7 @@ export class CsvStorage implements Storage {
         name: city.name,
         slug: city.slug,
         timezone: city.timezone,
-        last_game_id: city.last_game_id
-          ? parseInt(city.last_game_id)
-          : undefined,
+        last_game_id: city.last_game_id ?? undefined
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -139,15 +137,28 @@ export class CsvStorage implements Storage {
         skip_empty_lines: true,
       });
 
-      return records.map((record: any) => ({
-        _id: parseInt(record._id),
-        name: record.name,
-        slug: record.slug,
-        timezone: record.timezone,
-        latitude: record.latitude,
-        longitude: record.longitude,
-        last_game_id: record.last_game_id,
-      }));
+      return records.map((record: any) => {
+        let params
+        if (record.params !== '' && record.params !== undefined) {
+          try {
+              params = JSON.parse(record.params)
+              params.scrape.since = new Date(params.scrape.since)
+          } catch (e) {
+            logger.error(e)
+          }
+        }
+
+        return {
+          _id: parseInt(record._id),
+          name: record.name,
+          slug: record.slug,
+          timezone: record.timezone,
+          latitude: record.latitude,
+          longitude: record.longitude,
+          last_game_id: record.last_game_id,
+          params,
+        }
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
@@ -169,20 +180,13 @@ export class CsvStorage implements Storage {
       const cities = await this.getCities();
       const updatedCities = cities.map((city) => ({
         ...city,
+        params: JSON.stringify(city.params),
         last_game_id: city._id === cityId ? lastGameId : city.last_game_id,
       }));
 
       const csvWriter = createObjectCsvWriter({
         path: this.citiesFile,
-        header: [
-          "_id",
-          "name",
-          "slug",
-          "timezone",
-          "latitude",
-          "longitude",
-          "last_game_id",
-        ].map((key) => ({
+        header: ["_id","name","slug","timezone","latitude","longitude","params","last_game_id"].map((key) => ({
           id: key,
           title: key,
         })),
@@ -222,7 +226,6 @@ export class CsvStorage implements Storage {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return null;
       }
-      logger.info(JSON.stringify(error, null, 2));
       throw new StorageError("Failed to find series", error);
     }
   }
@@ -240,7 +243,7 @@ export class CsvStorage implements Storage {
       const csvWriter = createObjectCsvWriter({
         path: this.seriesFile,
         append: fileExists,
-        header: Object.keys(series).map((key) => ({
+        header: ['_id', 'name', 'slug', 'template_name', 'template_type'].map((key) => ({
           id: key,
           title: key,
         })),
@@ -290,7 +293,7 @@ export class CsvStorage implements Storage {
       const csvWriter = createObjectCsvWriter({
         path: this.gamesFile,
         append: fileExists,
-        header: Object.keys({ ...games[0], processed: false }).map((key) => ({
+        header: ["_id","city_id","series_id","number","package_number","date","price","location","address","is_stream","processed"].map((key) => ({
           id: key,
           title: key,
         })),
@@ -341,16 +344,21 @@ export class CsvStorage implements Storage {
       return (
         records
           // .slice(11875)
-          .filter((record: any) => record.processed !== "true")
+          .filter(
+            (record: any) =>
+              config.cityIds.includes(parseInt(record.city_id)) &&
+              record.processed !== "true",
+          )
           .map((record: any) => ({
-            ...record,
-            // _id: parseInt(record._id),
-            city_id: parseInt(record.city_id),
-            price: parseFloat(record.price),
-            date: new Date(record.date),
-            is_stream: record.is_stream === "true",
-            processed: record.processed === "true",
-          }))
+              ...record,
+              // _id: parseInt(record._id),
+              city_id: parseInt(record.city_id),
+              price: parseFloat(record.price),
+              date: new Date(record.date),
+              is_stream: record.is_stream === "true",
+              processed: record.processed === "true",
+
+            }))
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -375,7 +383,7 @@ export class CsvStorage implements Storage {
 
       const csvWriter = createObjectCsvWriter({
         path: this.gamesFile,
-        header: Object.keys(updatedRecords[0]).map((key) => ({
+        header: ["_id","city_id","series_id","number","package_number","date","price","location","address","is_stream","processed"].map((key) => ({
           id: key,
           title: key,
         })),
@@ -404,7 +412,7 @@ export class CsvStorage implements Storage {
       const csvWriter = createObjectCsvWriter({
         path: this.resultsFile,
         append: fileExists,
-        header: Object.keys(results[0]).map((key) => ({
+        header: ["_id","game_id","team_id","rounds","sum","place","rank_id","has_errors"].map((key) => ({
           id: key,
           title: key,
         })),

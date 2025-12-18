@@ -1,15 +1,13 @@
 import axios from "axios";
-import { load } from "cheerio";
-import https from "https";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
-import type { Storage } from "../storage/interface";
-import type { City, GameResult, RankMapping, Team } from "../types";
-import { columnMatchers } from "../utils/columnMatcher";
-import { logger } from "../utils/logger";
-import { normalizeText } from "../utils/normalize";
-import { generateUniqueTeamSlug } from "../utils/slug";
-import { buildGameResultsApiUrl } from "../urls";
+import type { Storage } from "../../storage/interface";
+import type { City, GameResult, RankMapping, Team } from "../../types";
+import { columnMatchers } from "../../utils/columnMatcher";
+import { logger } from "../../utils/logger";
+import { normalizeText } from "../../utils/normalize";
+import { generateUniqueTeamSlug } from "../../utils/slug";
+import { buildGameResultsApiUrl } from "./urls";
 
 const GameResultSchema = z.object({
   _id: z.string().uuid(),

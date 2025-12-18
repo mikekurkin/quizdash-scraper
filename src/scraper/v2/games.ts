@@ -3,12 +3,12 @@ import { parse } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
-import type { Storage } from "../storage/interface";
-import type { City, Game } from "../types";
-import { buildGamesApiUrl } from "../urls";
-import { logger } from "../utils/logger";
-import { normalizeText } from "../utils/normalize";
-import { generateSlug } from "../utils/slug";
+import type { Storage } from "../../storage/interface";
+import type { City, Game } from "../../types";
+import { buildGamesApiUrl } from "./urls";
+import { logger } from "../../utils/logger";
+import { normalizeText } from "../../utils/normalize";
+import { generateSlug } from "../../utils/slug";
 
 const GameSchema = z.object({
   id: z.string(),
