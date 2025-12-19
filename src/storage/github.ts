@@ -96,19 +96,6 @@ export class GitHubStorage extends CsvStorage {
       // Configure Git remote
       await this.ensureGitRemote();
 
-      // Configure Git
-      await this.runGitCommand(
-        "config",
-        "--local",
-        "user.name",
-        "QuizDash Scraper"
-      );
-      await this.runGitCommand(
-        "config",
-        "--local",
-        "user.email",
-        "scraper@quizdash.ru"
-      );
 
       // Check for .gitattributes to decide if we should use LFS
       const gitattributesPath = path.join(this.dataRepoPath, ".gitattributes");
@@ -177,20 +164,6 @@ export class GitHubStorage extends CsvStorage {
         // // Force push if we can't merge
         // await this.runGitCommand('push', 'origin', 'main', '--force');
       }
-
-      // Configure Git
-      await this.runGitCommand(
-        "config",
-        "--local",
-        "user.name",
-        "QuizDash Bot"
-      );
-      await this.runGitCommand(
-        "config",
-        "--local",
-        "user.email",
-        "bot@quizdash.local"
-      );
 
       // Configure Git LFS if .gitattributes is present
       const gitattributesPath = path.join(this.dataRepoPath, ".gitattributes");
