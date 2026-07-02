@@ -138,28 +138,39 @@ async function processPendingResults() {
       return [];
     }
 
+    // Exclude old games (dated before their city's scrape.since) up front so
+    // the progress total reflects the games we'll actually process instead of
+    // being dominated by games that are skipped instantly.
+    const citiesById = new Map(cities.map(city => [city._id, city]));
+    const gamesToProcess = allPendingGames.filter(game => {
+      const since = citiesById.get(game.city_id)?.params?.scrape?.since;
+      return !(since && game.date < since);
+    });
+
+    const skippedOld = allPendingGames.length - gamesToProcess.length;
+    if (skippedOld) {
+      logger.info(`Skipping ${skippedOld} old games (before scrape.since)`);
+    }
+
+    if (!gamesToProcess.length) {
+      logger.info("No pending games to process");
+      return [];
+    }
+
     const progress = createProgressBar(
-      allPendingGames.length,
+      gamesToProcess.length,
       "Processing pending results"
     );
 
     const results: GameResult[] = []
 
     for (let city of cities) {
-      const cityGames = allPendingGames.filter(game => game.city_id == city._id);
+      const cityGames = gamesToProcess.filter(game => game.city_id == city._id);
       const scraper = createScraper(city, storage, rankMappings)
 
       logger.info(`Scraping game results for city ${city.name} using ${scraper.strategy} strategy`)
 
       for (let game of cityGames) {
-        // Ignore old games
-        if (city.params?.scrape?.since && game.date < city.params?.scrape?.since) {
-          // logger.info(`Game ${game._id} is old, skipping`);
-          progress.increment(`Skipped game ${game._id} (old)`);
-          // await storage.markGameAsProcessed(game._id);
-          continue;
-        }
-
         // Ignore streams for now
         if (game.is_stream) {
           logger.info(`Game ${game._id} is stream, skipping`);
